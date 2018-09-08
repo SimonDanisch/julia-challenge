@@ -36,3 +36,65 @@ end
 macro broadcast(call_expr) 
     esc(br_construct(call_expr))
 end
+# Simplified implementation to take the axes of the array with the largest 
+# dimensionality (axes -> the range an array iterates over)
+biggest(a, b, c, rest...) = biggest(biggest(a, b), biggest(c, rest...))
+biggest(a::NTuple{N1, Any}, b::NTuple{N2, Any}) where {N1, N2} = 
+	ifelse(N1 > N2, a, b)
+biggest(a) = a
+flatten_args(t::LazyBroadcast, rest...) = 
+	(flatten_args(t.args...)..., flatten_args(rest...)...)
+flatten_args(t::Any, rest...) = (t, flatten_args(rest...)...)
+flatten_args() = ()
+# the indexing axes of our array
+axes(br::LazyBroadcast) = biggest(map(axes, flatten_args(br))...)
+# lazy view that can be used to index over all elements in br
+eachindex(br::LazyBroadcast) = CartesianIndices(axes(br)) 
+iterate(br::LazyBroadcast) = iterate(br, (eachindex(br),))
+@propagate_inbounds function iterate(bc::LazyBroadcast, s)
+    y = iterate(s...)
+    y === nothing && return nothing
+    i, newstate = y
+    return (bc[i], (s[1], newstate))
+end
+# Benchmarks
+
+using BenchmarkTools
+
+reference(out, a, b, c) = (out .= a .+ b .- sin.(c))
+
+a = rand(1000, 1000);
+b = rand(1000);
+c = 1.0
+out = similar(a);
+br = @broadcast a + b - sin(c)
+
+@btime materialize!($out, $br)
+@btime reference($out, $a, $b, $c)
+
+# Any library with NVectors specializing to the length will do!
+using GeometryTypes
+const Point3 = Point{3, Float32}
+
+# function needs to come from different library
+module LibraryB
+  # no odd stuff, no functors, no special lambda expression! 
+  # this function needs to be a normal language function
+  # as can be found in the wild
+	super_custom_func(a, b) = sqrt(sum(a .* b))
+end
+# emulate that the function comes from a different library
+using .LibraryB: super_custom_func 
+
+using BenchmarkTools
+
+a = rand(Point3, 10^6)
+b = rand(Point3, 10^6)
+out = fill(0f0, 10^6)
+
+@btime $out .= super_custom_func.($a, $b)
+br = @broadcast super_custom_func(a, b)
+@btime materialize!($out, $br)
+
+@btime sum($br) 
+@btime sum($a .+ $b .- sin.($c))
