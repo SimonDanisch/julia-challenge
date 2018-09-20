@@ -290,12 +290,15 @@ proc mainBench(nb_samples: int) =
     echo &"Stddev  broadcast time: {stats.standardDeviationS:>4.4f}s"
     echo &"Min     broadcast time: {stats.min:>4.4f}s"
     echo &"Max     broadcast time: {stats.max:>4.4f}s"
+    echo "\nDisplay output[[0,0]] to make sure it's not optimized away"
+    echo output[[0, 0]]
 
 when isMainModule:
   sanityChecks()
   echo "\n###################"
   echo "Benchmark"
   # {.passC: "-march=native" .} # uncomment to enable full optim (AVX/AVX2, ...)
+  # randomize(seed = 0)
   mainBench(1_000)
 
   # Compile with
