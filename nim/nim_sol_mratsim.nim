@@ -132,7 +132,12 @@ proc pop*(tree: var NimNode): NimNode =
 func nb_elems[N: static[int], T](x: typedesc[array[N, T]]): static[int] =
   N
 
-macro broadcast(inputs_body: varargs[untyped]): untyped =
+macro broadcastImpl(output: untyped, inputs_body: varargs[untyped]): untyped =
+  ## If output is empty node it will return a value
+  ## otherwise, result will be assigned in-place to output
+  let
+    in_place = newLit output.kind != nnkEmpty
+
   var
     inputs = inputs_body
     body = inputs.pop()
@@ -160,12 +165,18 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
       var `coord`: array[rank, int] # Current coordinates in the n-dimensional space
       `doBroadcast`
 
-      var output = newTensor[rank, type(`body`)](`shape`)
+      when not `in_place`:
+        var output = newTensor[rank, type(`body`)](`shape`)
+      else:
+        assert `output`.shape == `shape`
       var counter = 0
 
       while counter < `shape`.product:
         # Assign for the current iteration
-        output[`coord`] = `body`
+        when not `in_place`:
+          output[`coord`] = `body`
+        else:
+          `output`[`coord`] = `body`
 
         # Compute the next position
         for k in countdown(rank - 1, 0):
@@ -177,7 +188,14 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
         inc counter
 
       # Now return the value
-      output
+      when not `in_place`:
+        output
+
+macro broadcast(inputs_body: varargs[untyped]): untyped =
+  getAST(broadcastImpl(newEmptyNode(), inputs_body))
+
+macro materialize(output: var Tensor, inputs_body: varargs[untyped]): untyped =
+  getAST(broadcastImpl(output, inputs_body))
 
 when isMainModule:
   import math
@@ -193,6 +211,14 @@ when isMainModule:
       x * y
 
     echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[8, 80, 40, 15, 21, 9, 7, 70, 35, 45, 63, 27, 3, 30, 15, 40, 56, 24, 5, 50, 25, 15, 21, 9, 7, 70, 35, 5, 7, 3]))
+
+  block: # In-place, similar to Julia impl
+    echo "\nIn-place, similar to Julia impl"
+    var a = newTensor[3, int]([5, 2, 3])
+    materialize(a, x, y):
+      x * y
+
+    echo a
 
   block: # Complex multi statement with type conversion
     let a = broadcast(x, y):
