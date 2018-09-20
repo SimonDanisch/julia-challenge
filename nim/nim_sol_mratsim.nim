@@ -197,8 +197,11 @@ macro broadcast(inputs_body: varargs[untyped]): untyped =
 macro materialize(output: var Tensor, inputs_body: varargs[untyped]): untyped =
   getAST(broadcastImpl(output, inputs_body))
 
-when isMainModule:
-  import math
+#################################################################################
+
+import math
+proc sanityChecks() =
+  # Sanity checks
 
   let x = randomTensor([1, 2, 3], 10)
   let y = randomTensor([5, 2], 10)
@@ -207,6 +210,7 @@ when isMainModule:
   echo y # (shape: [5, 2], strides: [2, 1], offset: 0, storage: (data: @[8, 3, 7, 9, 3, 8, 5, 3, 7, 1]))
 
   block: # Simple assignation
+    echo "\nSimple assignation"
     let a = broadcast(x, y):
       x * y
 
@@ -221,6 +225,7 @@ when isMainModule:
     echo a
 
   block: # Complex multi statement with type conversion
+    echo "\nComplex multi statement with type conversion"
     let a = broadcast(x, y):
       let c = cos x.float64
       let s = sin y.float64
@@ -230,6 +235,7 @@ when isMainModule:
     echo a # (shape: [5, 2, 3], strides: [6, 3, 1], offset: 0, storage: (data: @[1.12727828058919, 1.297255090978019, 1.029220081237957, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.5003057878335346, 0.859191628789455, 1.072346394223034, 0.5584276483137685, 0.8508559734652587, 0.3168265963213802, 1.029220081237957, 1.243864280886628, 1.399612404734566, 1.100664502137075, 1.274196529364651, 1.0, 0.3168265963213802, 0.7669963922853442, 0.9999999999999999, 0.8506221091780486, 1.065679324094626, 0.7156085706291233, 0.8879964266455946, 1.129797339073468, 1.299291561428286]))
 
   block: # Variadic number of types with proc declaration inside
+    echo "\nVariadic number of types with proc declaration inside"
     var u, v, w, x, y, z = randomTensor([3, 3], 10)
 
     let c = 2
@@ -247,3 +253,51 @@ when isMainModule:
       uvw_divc mod ifNotZero(xmypz, 42)
 
     echo a # (shape: [3, 3], strides: [3, 1], offset: 0, storage: (data: @[0, 0, 0, 7, 4, 0, 0, 2, 0]))
+
+#################################################################################
+
+import math, random, times, stats, strformat
+proc mainBench(nb_samples: int) =
+  ## Bench with standard lib
+  block: # Warmup - make sure cpu is on max perf
+    let start = cpuTime()
+    var foo = 123
+    for i in 0 ..< 100_000_000:
+      foo += i*i mod 456
+      foo = foo mod 789
+
+    # Compiler shouldn't optimize away the results as cpuTime rely on sideeffects
+    let stop = cpuTime()
+    echo &"Warmup: {stop - start:>4.4f} s, result {foo} (displayed to avoid compiler optimizing warmup away)"
+
+  let
+    a = randomTensor([1000, 1000], 1.0)
+    b = randomTensor([1000], 1.0)
+    c = 1.0
+  var output = newTensor[2, float64](a.shape)
+
+  block: # Actual bench
+    var stats: RunningStat
+    for _ in 0 ..< nb_samples:
+      let start = cpuTime()
+      materialize(output, a, b, c):
+        a + b - sin c
+      let stop = cpuTime()
+      stats.push stop - start
+
+    echo &"Collected {stats.n} samples"
+    echo &"Average broadcast time: {stats.mean:>4.4f}s"
+    echo &"Stddev  broadcast time: {stats.standardDeviationS:>4.4f}s"
+    echo &"Min     broadcast time: {stats.min:>4.4f}s"
+    echo &"Max     broadcast time: {stats.max:>4.4f}s"
+
+when isMainModule:
+  sanityChecks()
+  echo "\n###################"
+  echo "Benchmark"
+  # {.passC: "-march=native" .} # uncomment to enable full optim (AVX/AVX2, ...)
+  mainBench(1_000)
+
+  # Compile with
+  # nim c -d:release nim/nim_sol_mratsim.nim     # for binary only
+  # nim c -r -d:release nim/nim_sol_mratsim.nim  # for binary + running
