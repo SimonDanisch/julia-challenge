@@ -286,10 +286,10 @@ proc mainBench(nb_samples: int) =
       stats.push stop - start
 
     echo &"Collected {stats.n} samples"
-    echo &"Average broadcast time: {stats.mean:>4.4f}s"
-    echo &"Stddev  broadcast time: {stats.standardDeviationS:>4.4f}s"
-    echo &"Min     broadcast time: {stats.min:>4.4f}s"
-    echo &"Max     broadcast time: {stats.max:>4.4f}s"
+    echo &"Average broadcast time: {stats.mean * 1000 :>4.3f}ms"
+    echo &"Stddev  broadcast time: {stats.standardDeviationS * 1000 :>4.3f}ms"
+    echo &"Min     broadcast time: {stats.min * 1000 :>4.3f}ms"
+    echo &"Max     broadcast time: {stats.max * 1000 :>4.3f}ms"
     echo "\nDisplay output[[0,0]] to make sure it's not optimized away"
     echo output[[0, 0]]
 
