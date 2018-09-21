@@ -407,7 +407,7 @@ int main()
     std::size_t min_time = 100000000;
 
     std::cout << "\n\nBenchmarking a + b - sin(c)\n===============================\n";
-    for (int i = 0; i < 20; ++i)
+    for (int i = 0; i < 200; ++i)
     {
         Timer timer;
         res = sqfunc;
@@ -435,7 +435,7 @@ int main()
 
     std::cout << "\n\nBenchmarking super_custom_func\n===============================\n";
 
-    for (int i = 0; i < 20; ++i)
+    for (int i = 0; i < 200; ++i)
     {
         Timer timer;
         pres = bc_super_custom_func;
