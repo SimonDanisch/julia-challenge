@@ -53,16 +53,16 @@ private:
 
 enum layout { row_major, col_major };
 
-template <std::size_t N, class... X, class... Args>
+template <std::size_t N, std::size_t I = 0, class... X, class... Args>
 auto recursive_for(const std::tuple<X...>& x, Args... args) {
-    if constexpr (N == 0)
-        for (std::size_t i = 0; i < std::get<0>(x).shape[0]; ++i)
+    if constexpr (I == N)
+        for (std::size_t i = 0; i < std::get<0>(x).shape[I]; ++i)
             std::get<0>(x)(args..., i);
     else
-        for (std::size_t i = 0; i < std::get<0>(x).shape[N]; ++i) {
+        for (std::size_t i = 0; i < std::get<0>(x).shape[I]; ++i) {
             if constexpr (sizeof...(X) > N)
                 std::get<N>(x)(args..., i);
-            recursive_for<N - 1>(x, args..., i);
+            recursive_for<N, I + 1>(x, args..., i);
         }
 }
 
@@ -127,7 +127,7 @@ public:
     using self_type = simple_array_view<CT, N>;
     using shape_type = std::array<ptrdiff_t, N>;
     using container_type = std::decay_t<CT>;
-    using value_type = typename container_type::value_type;
+    using value_type = std::decay_t<decltype(std::declval<CT>()[0])>;
     using container_reference = std::decay_t<CT>&;
 
     simple_array_view() = default;
@@ -137,10 +137,10 @@ public:
         ptrdiff_t data_size = 1;
         if constexpr (N > 0) {
             if constexpr (L == row_major) {
-                strides[N - 1] = 1;
+                strides[N - 1] = shape[N - 1] != 1 ? 1 : 0;
                 for (std::ptrdiff_t i = N - 1; i > 0; --i) {
                     data_size *= static_cast<ptrdiff_t>(shape[i]);
-                    strides[i - 1] = shape[i] != 1 ? data_size : 0;
+                    strides[i - 1] = shape[i - 1] != 1 ? data_size : 0;
                 }
                 data_size *= shape[0];
             }
@@ -171,10 +171,15 @@ public:
         }
     }
 
-    explicit simple_array_view(value_type data, const std::array<ptrdiff_t, N>& shape) {
+    explicit simple_array_view(value_type data, const std::array<ptrdiff_t, N>& i_shape) : shape(i_shape) {
         container_resize(memory, compute_strides());
         std::fill(memory.begin(), memory.end(), data);
         compute_strides();
+    }
+
+    explicit simple_array_view(CT data, const std::array<ptrdiff_t, N>& i_shape,
+                               const std::array<ptrdiff_t, N>& i_strides) : memory(data), shape(i_shape), strides(i_strides)
+    {
     }
 
     template <class T>
@@ -193,8 +198,7 @@ public:
     }
 
     template <class LM, class... X>
-    simple_array_view(const qfunction<LM, X...>& e) {
-        shape = e.shape;
+    simple_array_view(const qfunction<LM, X...>& e) : shape(e.shape) {
         container_resize(memory, compute_strides());
         assign_impl(e);
     }
@@ -224,7 +228,8 @@ public:
     size_t size() const { return memory.size(); };
 
     CT memory;
-    std::array<ptrdiff_t, N> shape, strides;
+    std::array<ptrdiff_t, N> shape;
+    std::array<ptrdiff_t, N> strides;
 };
 
 template <class... Args>
@@ -248,12 +253,12 @@ public:
     qfunction(F f, Args&&... args)
         : m_f(f), m_args(std::forward<Args>(args)...)
     {
-        std::fill(shape.begin(), shape.end(), 0);
+        std::fill(shape.begin(), shape.end(), 1);
 
         auto broadcast_shape = [this](const auto& v) constexpr {
             std::size_t offset = this->shape.size() - v.shape.size();
             for (std::size_t i = 0; i < v.shape.size(); ++i) {
-                if (this->shape[offset + i] == 0)
+                if (this->shape[offset + i] == 1)
                     this->shape[offset + i] = v.shape[i];
                 else
                     if (v.shape[i] != this->shape[offset + i] && v.shape[i] != 1)
@@ -261,6 +266,7 @@ public:
             }
             return true;
         };
+
         for_each(broadcast_shape, m_args);
     }
 
@@ -288,6 +294,9 @@ public:
 
 template <std::size_t N, class T = double>
 using qarray = simple_array_view<std::vector<T>, N>;
+
+template <std::size_t N, class T = double>
+using qview = simple_array_view<T*, N>;
 
 template <class T>
 decltype(auto) wrap_if_scalar(T&& arg)
@@ -349,14 +358,27 @@ void qprint(T&& t, O& os = std::cout)
 
 using Point3 = simple_array_view<std::array<float, 3>, 1>;
 
-// template <class T>
-// auto sum(const T& t)
-// {
-//     qarray<0, float> res({0.0}, {});
-//     auto sum_func = make_qfunc([](auto& lhs, auto rhs) { lhs += rhs; }, res, t);
-//     recursive_for<std::tuple_size<typename T::shape_type>::value - 1>(std::make_tuple(sum_func));
-//     return res.memory[0];
-// }
+template <class C>
+constexpr auto compute_size(const C& cnt)
+{
+    return std::accumulate(cnt.cbegin(), cnt.cend(), size_t(1), std::multiplies<size_t>());
+}
+
+template <class T, class I, std::size_t N>
+auto sum_axis(const T& t, const I (&axes)[N])
+{
+    auto res_shape = t.shape;
+    for (auto el : axes)
+        res_shape[el] = 1;
+    auto data = std::vector<float>(compute_size(res_shape));
+    qarray<2, float> res(data, res_shape);
+
+    auto sum_func = make_qfunc([](auto& lhs, auto rhs) {
+         lhs += rhs;
+    }, res, t);
+    recursive_for<std::tuple_size<typename T::shape_type>::value - 1>(std::make_tuple(sum_func));
+    return res;
+}
 
 // auto sum(const Point3& a)
 // {
@@ -367,6 +389,30 @@ using Point3 = simple_array_view<std::array<float, 3>, 1>;
 //     }
 //     return result;
 // }
+
+template <class T>
+auto cumsum(const T& t, std::ptrdiff_t ax)
+{
+    std::array<ptrdiff_t, 2> index = {0, 0};
+    index[ax] = 1; // first elem
+    auto offset = std::inner_product(index.begin(), index.end(), t.strides.begin(), 0);
+
+    auto view_shape = t.shape;
+    view_shape[ax] -= 1;
+
+    qarray<2, double> res = t; // copy (copy only first "line")
+
+    // pick first element, e.g. res(0, 1) but indexing with std array not possible r
+    qview<2, double> rhs_v(&res(0, 0), view_shape, t.strides);
+    qview<2, double> lhs_v(&res.memory[offset], view_shape, t.strides);
+    auto sum_func = make_qfunc([](auto& lhs, auto rhs) {
+         lhs += rhs;
+    }, lhs_v, rhs_v);
+
+    recursive_for<std::tuple_size<typename T::shape_type>::value - 1>(std::make_tuple(sum_func));
+    return res;
+}
+
 
 template <class T>
 auto sum(const T& t)
@@ -388,8 +434,12 @@ int main()
     std::iota(b2.begin(), b2.end(), 0.0);
     auto b3 = 2.5;
     auto bc_func = qarray<2>(b1, {5, 5}) + qarray<1>(b2, {5})  * b3;
-
     qprint(bc_func);
+
+    auto q1 = qarray<2>(b1, {5, 5});
+
+    qprint(cumsum(q1, 0));
+    qprint(cumsum(q1, 1));
 
     // std::cout << sum(bc_func) << std::endl;
 
@@ -406,7 +456,39 @@ int main()
     
     std::size_t min_time = 100000000;
 
-    std::cout << "\n\nBenchmarking a + b - sin(c)\n===============================\n";
+    qprint(cumsum(q1, 1));
+    std::cout << "\n\nBenchmarking cumsum(a[5x5], 1)\n===============================\n";
+
+    for (int i = 0; i < 10'000; ++i)
+    {
+        Timer timer;
+        res = cumsum(q1, 1);
+        auto elapsed = timer.elapsed(); // nanoseconds
+        if (elapsed < min_time) min_time = elapsed;
+        // std::cout << "TIME: "  << (double) elapsed / (double) 1000 << " μs" << std::endl;
+    }
+
+    std::cout << "\nMIN TIME: " << min_time << " ns\n";
+    std::cout << "        = " << (double) min_time / (double) 1000 << " μs" << std::endl;
+
+    min_time = 100000000;
+
+    std::cout << "\n\nBenchmarking sum_axis(a[5x5], {0})\n===============================\n";
+
+    for (int i = 0; i < 10'000; ++i)
+    {
+        Timer timer;
+        auto s_res = sum_axis(q1, {0});
+        auto elapsed = timer.elapsed(); // nanoseconds
+        if (elapsed < min_time) min_time = elapsed;
+        // std::cout << "TIME: "  << (double) elapsed / (double) 1000 << " μs" << std::endl;
+    }
+
+    std::cout << "\nMIN TIME: " << min_time << " ns\n";
+    std::cout << "        = " << (double) min_time / (double) 1000 << " μs" << std::endl;
+
+    min_time = 100000000;
+    std::cout << "\n\nBenchmarking a[1000x1000] + b[1000] - sin(c[])\n===================================\n";
     for (int i = 0; i < 200; ++i)
     {
         Timer timer;
