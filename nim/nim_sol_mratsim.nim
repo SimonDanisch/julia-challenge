@@ -176,9 +176,8 @@ macro broadcastImpl(output: untyped, inputs_body: varargs[untyped]): untyped =
         var output = newTensor[rank, type(`body`)](`shape`)
       else:
         assert `output`.shape == `shape`
-      var counter = 0
 
-      while counter < `shape`.product:
+      for _ in 0 ..< `shape`.product:
         # Assign for the current iteration
         when not `in_place`:
           output[`coord`] = `body`
@@ -192,7 +191,6 @@ macro broadcastImpl(output: untyped, inputs_body: varargs[untyped]): untyped =
             break
           else:
             `coord`[k] = 0
-        inc counter
 
       # Now return the value
       when not `in_place`:
@@ -260,6 +258,17 @@ proc sanityChecks() =
       uvw_divc mod ifNotZero(xmypz, 42)
 
     echo a # (shape: [3, 3], strides: [3, 1], offset: 0, storage: (data: @[0, 0, 0, 7, 4, 0, 0, 2, 0]))
+
+  block: # Simple broadcasted addition test
+    echo "\nSimple broadcasted addition test"
+    var a = newTensor[2, int]([2, 3])
+    a.storage.data = @[3, 2, 1, 1, 2, 3] # Ideally we should have arrays of arrays -> tensor conversion
+    var b = newTensor[2, int]([1, 3])
+    b.storage.data = @[1, 2, 3]
+
+    let c = broadcast(a, b): a + b
+    doAssert c.storage.data == @[4, 4, 4, 2, 4, 6]
+    echo "✓ Passed"
 
 #################################################################################
 
